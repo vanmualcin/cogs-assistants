@@ -6,6 +6,8 @@ ESO PC addon for binding assistants and companions without relying on another ad
 
 The in-game **Settings > Addons > Cogs Assistants** panel appears when `LibAddonMenu-2.0` is installed and enabled. Without LibAddonMenu, the addon still works through slash commands and keybinds.
 
+Settings are account-wide by default. In the settings panel, enable **Use character-specific settings** on any character that should keep its own assistant and companion assignments. The first time character-specific settings are enabled for that character, the current account-wide settings are copied over.
+
 ## Packaging
 
 The source directory is `cogs-assistants`, but the addon identity and release package are `CogsAssistants`. The lowercase `cogs-assistants.txt` manifest is only for running directly from this source folder; the GitHub Actions workflow stages only `CogsAssistants.txt` into `dist/CogsAssistants/` and creates `CogsAssistants.zip` for ESOUI upload.
@@ -38,6 +40,8 @@ Type binds default to random unlocked collectibles. Companion slots default to t
 - `/ca slot 1 clear` returns Companion Slot 1 to sorted-list behavior.
 - `/ca classify merchant Baron` manually classifies an unlocked assistant if ESO adds one the name detector does not recognize.
 - `/ca unclassify Baron` removes that manual assistant classification.
+- `/ca scope account` uses account-wide settings.
+- `/ca scope character` uses character-specific settings for the current character only.
 - `/ca summon banker` summons without pressing the keybind.
 - `/ca status` shows current selections.
 - `/ca debug` prints unclassified assistants during collectible refresh.
