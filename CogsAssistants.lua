@@ -3,8 +3,10 @@ CogsAssistants = CogsAssistants or {}
 local ADDON_NAME = "CogsAssistants"
 local DEV_ADDON_NAME = "cogs-assistants"
 local EVENT_NAMESPACE = "CogsAssistants"
+local ADDON_VERSION = "0.1.1"
 local SAVED_VARIABLES_NAME = "CogsAssistantsSavedVariables"
 local SAVED_VARIABLES_VERSION = 1
+local PREFERENCES_NAMESPACE = "Preferences"
 local CHAT_PREFIX = "|c9ac7ffCogs Assistants|r"
 local RANDOM_MODE = "random"
 local STATIC_MODE = "static"
@@ -91,6 +93,11 @@ local DEFAULTS =
     debug = false,
 }
 
+local DEFAULT_PREFERENCES =
+{
+    characterSettingsEnabled = {},
+}
+
 local function Chat(message)
     d(string.format("%s %s", CHAT_PREFIX, message))
 end
@@ -161,6 +168,18 @@ local function CloneDefaults()
     return clone
 end
 
+local function DeepCopy(source)
+    if type(source) ~= "table" then
+        return source
+    end
+
+    local target = {}
+    for key, value in pairs(source) do
+        target[key] = DeepCopy(value)
+    end
+    return target
+end
+
 local function GetSelection(typeKey)
     local selection = CogsAssistants.savedVariables.selections[typeKey]
     if not selection then
@@ -180,6 +199,63 @@ local function EnsureSavedVariableShape()
             CogsAssistants.savedVariables.selections[typeKey] = { mode = setting.mode, collectibleId = setting.collectibleId }
         end
     end
+
+    CogsAssistants.savedVariables.settingsInitialized = true
+end
+
+local function GetCurrentCharacterPreferenceKey()
+    return tostring(GetCurrentCharacterId())
+end
+
+local function EnsurePreferenceShape()
+    CogsAssistants.preferences.characterSettingsEnabled = CogsAssistants.preferences.characterSettingsEnabled or {}
+end
+
+function CogsAssistants:LoadSavedVariables(copyCurrentSettings)
+    local currentSettings = self.savedVariables
+    local useCharacterSettings = self:IsUsingCharacterSettings()
+    local targetSettings
+
+    if useCharacterSettings then
+        targetSettings = ZO_SavedVars:NewCharacterIdSettings(SAVED_VARIABLES_NAME, SAVED_VARIABLES_VERSION, nil, CloneDefaults())
+        self.settingsScope = "character"
+    else
+        targetSettings = ZO_SavedVars:NewAccountWide(SAVED_VARIABLES_NAME, SAVED_VARIABLES_VERSION, nil, CloneDefaults())
+        self.settingsScope = "account"
+    end
+
+    if copyCurrentSettings and currentSettings and not targetSettings.settingsInitialized then
+        for key, value in pairs(currentSettings) do
+            targetSettings[key] = DeepCopy(value)
+        end
+    end
+
+    self.savedVariables = targetSettings
+    EnsureSavedVariableShape()
+end
+
+function CogsAssistants:IsUsingCharacterSettings()
+    if not self.preferences then
+        return false
+    end
+
+    EnsurePreferenceShape()
+    return self.preferences.characterSettingsEnabled[GetCurrentCharacterPreferenceKey()] or false
+end
+
+function CogsAssistants:SetUseCharacterSettings(useCharacterSettings)
+    useCharacterSettings = useCharacterSettings and true or false
+    EnsurePreferenceShape()
+
+    local characterPreferenceKey = GetCurrentCharacterPreferenceKey()
+    if (self.preferences.characterSettingsEnabled[characterPreferenceKey] or false) == useCharacterSettings then
+        return
+    end
+
+    self.preferences.characterSettingsEnabled[characterPreferenceKey] = useCharacterSettings or nil
+    self:LoadSavedVariables(true)
+    self:RefreshCollectibles()
+    Chat(string.format("Settings are now %s.", useCharacterSettings and "character-specific" or "account-wide"))
 end
 
 local function GetActorCategoryForType(typeKey)
@@ -587,7 +663,7 @@ end
 
 function CogsAssistants:PrintStatus()
     self:RefreshCollectibles()
-    Chat("Status:")
+    Chat(string.format("Status (%s settings):", self.settingsScope == "character" and "character-specific" or "account-wide"))
     for _, typeKey in ipairs(TYPE_ORDER) do
         local selection = GetSelection(typeKey)
         local value = "random"
@@ -606,8 +682,20 @@ function CogsAssistants:PrintHelp()
     Chat("  /cogsassistants slot <1-12> <companion name|id|clear>")
     Chat("  /cogsassistants classify <type> <assistant name|id>")
     Chat("  /cogsassistants unclassify <assistant name|id>")
+    Chat("  /cogsassistants scope <account|character>")
     Chat("  /cogsassistants summon <type>")
     Chat("  /cogsassistants debug")
+end
+
+function CogsAssistants:SetSettingsScope(scope)
+    scope = Normalize(scope)
+    if scope == "account" or scope == "accountwide" or scope == "account-wide" then
+        self:SetUseCharacterSettings(false)
+    elseif scope == "character" or scope == "character-specific" or scope == "char" then
+        self:SetUseCharacterSettings(true)
+    else
+        Chat("Scope must be account or character.")
+    end
 end
 
 function CogsAssistants:RegisterSettingsPanel()
@@ -630,7 +718,7 @@ function CogsAssistants:RegisterSettingsPanel()
         name = "Cogs Assistants",
         displayName = "Cogs Assistants",
         author = "Cogs",
-        version = "0.1.0",
+        version = ADDON_VERSION,
         registerForRefresh = true,
         registerForDefaults = false,
     })
@@ -639,6 +727,17 @@ function CogsAssistants:RegisterSettingsPanel()
         {
             type = "description",
             text = "Assign assistant types and companion slots. Keybinds are under Controls > Keybindings > Cogs Assistants.",
+        },
+        {
+            type = "header",
+            name = "Settings Scope",
+        },
+        {
+            type = "checkbox",
+            name = "Use character-specific settings",
+            tooltip = "Off by default. When first enabled on a character, the current account-wide settings are copied to that character.",
+            getFunc = function() return self:IsUsingCharacterSettings() end,
+            setFunc = function(value) self:SetUseCharacterSettings(value) end,
         },
         {
             type = "checkbox",
@@ -685,7 +784,7 @@ function CogsAssistants:RegisterSettingsPanel()
     })
     table.insert(options, {
         type = "description",
-        text = "If a newly added assistant does not appear under the right type, use /ca classify <type> <assistant name or id> once. The override is saved account-wide.",
+        text = "If a newly added assistant does not appear under the right type, use /ca classify <type> <assistant name or id> once. The override is saved in the active settings scope.",
     })
 
     LAM:RegisterOptionControls("CogsAssistantsOptions", options)
@@ -727,6 +826,8 @@ function CogsAssistants:HandleSlashCommand(text)
         self:ClassifyAssistant(Normalize(args[2]), Remainder(args, 3))
     elseif command == "unclassify" then
         self:ClearAssistantClassification(Remainder(args, 2))
+    elseif command == "scope" then
+        self:SetSettingsScope(args[2])
     elseif command == "summon" then
         self:SummonType(Normalize(args[2]))
     elseif command == "debug" then
@@ -765,8 +866,9 @@ local function OnAddOnLoaded(_, addonName)
     end
 
     EVENT_MANAGER:UnregisterForEvent(EVENT_NAMESPACE, EVENT_ADD_ON_LOADED)
-    CogsAssistants.savedVariables = ZO_SavedVars:NewAccountWide(SAVED_VARIABLES_NAME, SAVED_VARIABLES_VERSION, nil, CloneDefaults())
-    EnsureSavedVariableShape()
+    CogsAssistants.preferences = ZO_SavedVars:NewAccountWide(SAVED_VARIABLES_NAME, SAVED_VARIABLES_VERSION, PREFERENCES_NAMESPACE, DEFAULT_PREFERENCES)
+    EnsurePreferenceShape()
+    CogsAssistants:LoadSavedVariables(false)
     CogsAssistants:RefreshCollectibles()
     CogsAssistants:RegisterSettingsPanel()
     SLASH_COMMANDS["/cogsassistants"] = function(text) CogsAssistants:HandleSlashCommand(text) end
