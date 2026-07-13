@@ -1,9 +1,10 @@
 CogsAssistants = CogsAssistants or {}
+local CogsAssistants = CogsAssistants
 
 local ADDON_NAME = "CogsAssistants"
 local DEV_ADDON_NAME = "cogs-assistants"
 local EVENT_NAMESPACE = "CogsAssistants"
-local ADDON_VERSION = "0.1.1"
+local ADDON_VERSION = "0.1.2"
 local SAVED_VARIABLES_NAME = "CogsAssistantsSavedVariables"
 local SAVED_VARIABLES_VERSION = 1
 local PREFERENCES_NAMESPACE = "Preferences"
@@ -180,6 +181,34 @@ local function DeepCopy(source)
     return target
 end
 
+local function CopySavedVariables(source, target)
+    if not source or not target then
+        return
+    end
+
+    for key, value in pairs(source) do
+        target[key] = DeepCopy(value)
+    end
+end
+
+local function GetLegacySavedVariables(namespace, useCharacterSettings)
+    local savedVariables = _G[SAVED_VARIABLES_NAME]
+    local namespaceTable = savedVariables and savedVariables[namespace or "Default"]
+    local displayName = GetDisplayName and GetDisplayName()
+    local accountTable = displayName and namespaceTable and namespaceTable[displayName]
+
+    if not accountTable then
+        return nil
+    end
+
+    if useCharacterSettings then
+        local characterId = GetCurrentCharacterId()
+        return accountTable[tostring(characterId)] or accountTable[characterId]
+    end
+
+    return accountTable["$AccountWide"]
+end
+
 local function GetSelection(typeKey)
     local selection = CogsAssistants.savedVariables.selections[typeKey]
     if not selection then
@@ -212,35 +241,38 @@ local function EnsurePreferenceShape()
 end
 
 function CogsAssistants:LoadSavedVariables(copyCurrentSettings)
-    local currentSettings = self.savedVariables
-    local useCharacterSettings = self:IsUsingCharacterSettings()
+    local currentSettings = CogsAssistants.savedVariables
+    local useCharacterSettings = CogsAssistants:IsUsingCharacterSettings()
+    local legacySettings
     local targetSettings
 
     if useCharacterSettings then
-        targetSettings = ZO_SavedVars:NewCharacterIdSettings(SAVED_VARIABLES_NAME, SAVED_VARIABLES_VERSION, nil, CloneDefaults())
-        self.settingsScope = "character"
+        legacySettings = GetLegacySavedVariables(nil, true)
+        targetSettings = ZO_SavedVars:NewCharacterIdSettings(SAVED_VARIABLES_NAME, SAVED_VARIABLES_VERSION, nil, CloneDefaults(), GetWorldName())
+        CogsAssistants.settingsScope = "character"
     else
-        targetSettings = ZO_SavedVars:NewAccountWide(SAVED_VARIABLES_NAME, SAVED_VARIABLES_VERSION, nil, CloneDefaults())
-        self.settingsScope = "account"
+        legacySettings = GetLegacySavedVariables(nil, false)
+        targetSettings = ZO_SavedVars:NewAccountWide(SAVED_VARIABLES_NAME, SAVED_VARIABLES_VERSION, nil, CloneDefaults(), GetWorldName())
+        CogsAssistants.settingsScope = "account"
     end
 
     if copyCurrentSettings and currentSettings and not targetSettings.settingsInitialized then
-        for key, value in pairs(currentSettings) do
-            targetSettings[key] = DeepCopy(value)
-        end
+        CopySavedVariables(currentSettings, targetSettings)
+    elseif legacySettings and legacySettings.settingsInitialized and not targetSettings.settingsInitialized then
+        CopySavedVariables(legacySettings, targetSettings)
     end
 
-    self.savedVariables = targetSettings
+    CogsAssistants.savedVariables = targetSettings
     EnsureSavedVariableShape()
 end
 
 function CogsAssistants:IsUsingCharacterSettings()
-    if not self.preferences then
+    if not CogsAssistants.preferences then
         return false
     end
 
     EnsurePreferenceShape()
-    return self.preferences.characterSettingsEnabled[GetCurrentCharacterPreferenceKey()] or false
+    return CogsAssistants.preferences.characterSettingsEnabled[GetCurrentCharacterPreferenceKey()] or false
 end
 
 function CogsAssistants:SetUseCharacterSettings(useCharacterSettings)
@@ -248,13 +280,13 @@ function CogsAssistants:SetUseCharacterSettings(useCharacterSettings)
     EnsurePreferenceShape()
 
     local characterPreferenceKey = GetCurrentCharacterPreferenceKey()
-    if (self.preferences.characterSettingsEnabled[characterPreferenceKey] or false) == useCharacterSettings then
+    if (CogsAssistants.preferences.characterSettingsEnabled[characterPreferenceKey] or false) == useCharacterSettings then
         return
     end
 
-    self.preferences.characterSettingsEnabled[characterPreferenceKey] = useCharacterSettings or nil
-    self:LoadSavedVariables(true)
-    self:RefreshCollectibles()
+    CogsAssistants.preferences.characterSettingsEnabled[characterPreferenceKey] = useCharacterSettings or nil
+    CogsAssistants:LoadSavedVariables(true)
+    CogsAssistants:RefreshCollectibles()
     Chat(string.format("Settings are now %s.", useCharacterSettings and "character-specific" or "account-wide"))
 end
 
@@ -297,7 +329,7 @@ local function BuildCollectibleList(categoryType, actorCategory)
 end
 
 function CogsAssistants:RefreshCollectibles()
-    self.collectibles =
+    CogsAssistants.collectibles =
     {
         merchant = {},
         banker = {},
@@ -310,16 +342,16 @@ function CogsAssistants:RefreshCollectibles()
     local assistants = BuildCollectibleList(COLLECTIBLE_CATEGORY_TYPE_ASSISTANT, GAMEPLAY_ACTOR_CATEGORY_PLAYER)
     for _, collectibleId in ipairs(assistants) do
         local normalizedName = Normalize(GetCollectibleNameSafe(collectibleId))
-        local overrideType = self.savedVariables
-            and self.savedVariables.assistantOverrides
-            and self.savedVariables.assistantOverrides[collectibleId]
+        local overrideType = CogsAssistants.savedVariables
+            and CogsAssistants.savedVariables.assistantOverrides
+            and CogsAssistants.savedVariables.assistantOverrides[collectibleId]
         if overrideType and TYPE_LABELS[overrideType] and overrideType ~= "companion" then
-            table.insert(self.collectibles[overrideType], collectibleId)
+            table.insert(CogsAssistants.collectibles[overrideType], collectibleId)
         else
             local matched = false
             for typeKey, keywords in pairs(ASSISTANT_KEYWORDS) do
                 if ContainsAny(normalizedName, keywords) then
-                    table.insert(self.collectibles[typeKey], collectibleId)
+                    table.insert(CogsAssistants.collectibles[typeKey], collectibleId)
                     matched = true
                 end
             end
@@ -329,23 +361,23 @@ function CogsAssistants:RefreshCollectibles()
         end
     end
 
-    self.companionAliases = {}
+    CogsAssistants.companionAliases = {}
     local companions = BuildCollectibleList(COLLECTIBLE_CATEGORY_TYPE_COMPANION, GAMEPLAY_ACTOR_CATEGORY_PLAYER)
     for _, collectibleId in ipairs(companions) do
-        table.insert(self.collectibles.companion, collectibleId)
+        table.insert(CogsAssistants.collectibles.companion, collectibleId)
         local normalizedName = Normalize(GetCollectibleNameSafe(collectibleId))
-        self.companionAliases[normalizedName] = collectibleId
+        CogsAssistants.companionAliases[normalizedName] = collectibleId
         for alias, canonical in pairs(KNOWN_COMPANION_ALIASES) do
             if normalizedName:find(alias, 1, true) or normalizedName:find(canonical, 1, true) then
-                self.companionAliases[canonical] = collectibleId
-                self.companionAliases[alias] = collectibleId
+                CogsAssistants.companionAliases[canonical] = collectibleId
+                CogsAssistants.companionAliases[alias] = collectibleId
             end
         end
     end
 end
 
 function CogsAssistants:FindAssistant(searchText)
-    self:RefreshCollectibles()
+    CogsAssistants:RefreshCollectibles()
 
     local normalizedSearch = Normalize(searchText)
     local numericId = tonumber(normalizedSearch)
@@ -364,7 +396,7 @@ function CogsAssistants:FindAssistant(searchText)
 end
 
 function CogsAssistants:GetRandomCollectible(typeKey)
-    local list = self.collectibles[typeKey] or {}
+    local list = CogsAssistants.collectibles[typeKey] or {}
     if #list == 0 then
         return nil
     end
@@ -387,7 +419,7 @@ function CogsAssistants:GetRandomCollectible(typeKey)
 end
 
 function CogsAssistants:ResolveCollectibleForType(typeKey)
-    self:RefreshCollectibles()
+    CogsAssistants:RefreshCollectibles()
 
     local selection = GetSelection(typeKey)
     local collectibleId = selection.collectibleId
@@ -399,7 +431,7 @@ function CogsAssistants:ResolveCollectibleForType(typeKey)
         Chat(string.format("%s is no longer available; choosing a random %s.", GetCollectibleNameSafe(collectibleId), TYPE_LABELS[typeKey]:lower()))
     end
 
-    return self:GetRandomCollectible(typeKey)
+    return CogsAssistants:GetRandomCollectible(typeKey)
 end
 
 function CogsAssistants:UseCollectible(collectibleId, typeKey)
@@ -424,23 +456,23 @@ function CogsAssistants:SummonType(typeKey)
         return
     end
 
-    local collectibleId = self:ResolveCollectibleForType(typeKey)
-    self:UseCollectible(collectibleId, typeKey)
+    local collectibleId = CogsAssistants:ResolveCollectibleForType(typeKey)
+    CogsAssistants:UseCollectible(collectibleId, typeKey)
 end
 
 function CogsAssistants:SummonCompanionSlot(slotIndex)
-    self:RefreshCollectibles()
+    CogsAssistants:RefreshCollectibles()
 
-    local collectibleId = self.savedVariables.companionSlots[slotIndex]
+    local collectibleId = CogsAssistants.savedVariables.companionSlots[slotIndex]
     if collectibleId and IsUnlockedAndListable(collectibleId, GAMEPLAY_ACTOR_CATEGORY_PLAYER) then
-        self:UseCollectible(collectibleId, "companion")
+        CogsAssistants:UseCollectible(collectibleId, "companion")
         return
     end
 
-    local list = self.collectibles.companion or {}
+    local list = CogsAssistants.collectibles.companion or {}
     collectibleId = list[slotIndex]
     if collectibleId then
-        self:UseCollectible(collectibleId, "companion")
+        CogsAssistants:UseCollectible(collectibleId, "companion")
         return
     end
 
@@ -448,22 +480,22 @@ function CogsAssistants:SummonCompanionSlot(slotIndex)
 end
 
 function CogsAssistants:SummonCompanionNamed(alias)
-    self:RefreshCollectibles()
+    CogsAssistants:RefreshCollectibles()
 
-    local collectibleId = self.companionAliases[Normalize(alias)]
+    local collectibleId = CogsAssistants.companionAliases[Normalize(alias)]
     if collectibleId then
-        self:UseCollectible(collectibleId, "companion")
+        CogsAssistants:UseCollectible(collectibleId, "companion")
     else
         Chat(string.format("That companion is not unlocked or was not found: %s.", alias))
     end
 end
 
 function CogsAssistants:FindCollectible(typeKey, searchText)
-    self:RefreshCollectibles()
+    CogsAssistants:RefreshCollectibles()
 
     local normalizedSearch = Normalize(searchText)
     local numericId = tonumber(normalizedSearch)
-    local list = self.collectibles[typeKey] or {}
+    local list = CogsAssistants.collectibles[typeKey] or {}
 
     if numericId then
         for _, collectibleId in ipairs(list) do
@@ -489,7 +521,7 @@ function CogsAssistants:FindCollectible(typeKey, searchText)
 end
 
 function CogsAssistants:GetCollectibleChoices(typeKey, includeClear)
-    self:RefreshCollectibles()
+    CogsAssistants:RefreshCollectibles()
 
     local choices = {}
     if includeClear then
@@ -498,7 +530,7 @@ function CogsAssistants:GetCollectibleChoices(typeKey, includeClear)
         table.insert(choices, RANDOM_CHOICE)
     end
 
-    for _, collectibleId in ipairs(self.collectibles[typeKey] or {}) do
+    for _, collectibleId in ipairs(CogsAssistants.collectibles[typeKey] or {}) do
         table.insert(choices, FormatChoiceName(collectibleId))
     end
 
@@ -515,18 +547,18 @@ end
 
 function CogsAssistants:SetSelectionChoice(typeKey, choice)
     if choice == RANDOM_CHOICE then
-        self:SetTypeSelection(typeKey, RANDOM_MODE)
+        CogsAssistants:SetTypeSelection(typeKey, RANDOM_MODE)
         return
     end
 
     local collectibleId = StripChoiceId(choice)
     if collectibleId then
-        self:SetTypeSelection(typeKey, tostring(collectibleId))
+        CogsAssistants:SetTypeSelection(typeKey, tostring(collectibleId))
     end
 end
 
 function CogsAssistants:GetCompanionSlotChoice(slotIndex)
-    local collectibleId = self.savedVariables.companionSlots[slotIndex]
+    local collectibleId = CogsAssistants.savedVariables.companionSlots[slotIndex]
     if collectibleId then
         return FormatChoiceName(collectibleId)
     end
@@ -535,13 +567,13 @@ end
 
 function CogsAssistants:SetCompanionSlotChoice(slotIndex, choice)
     if choice == CLEAR_CHOICE then
-        self:SetCompanionSlot(slotIndex, "clear")
+        CogsAssistants:SetCompanionSlot(slotIndex, "clear")
         return
     end
 
     local collectibleId = StripChoiceId(choice)
     if collectibleId then
-        self:SetCompanionSlot(slotIndex, tostring(collectibleId))
+        CogsAssistants:SetCompanionSlot(slotIndex, tostring(collectibleId))
     end
 end
 
@@ -576,7 +608,7 @@ function CogsAssistants:SetTypeSelection(typeKey, searchText)
         return
     end
 
-    local collectibleId = self:FindCollectible(typeKey, searchText)
+    local collectibleId = CogsAssistants:FindCollectible(typeKey, searchText)
     if not collectibleId then
         Chat(string.format("Could not find an unlocked %s matching '%s'.", TYPE_LABELS[typeKey]:lower(), searchText))
         return
@@ -596,18 +628,18 @@ function CogsAssistants:SetCompanionSlot(slotIndex, searchText)
     end
 
     if Normalize(searchText) == RANDOM_MODE or Normalize(searchText) == "clear" then
-        self.savedVariables.companionSlots[slotIndex] = nil
+        CogsAssistants.savedVariables.companionSlots[slotIndex] = nil
         Chat(string.format("Companion slot %d will use the sorted unlocked companion at that position.", slotIndex))
         return
     end
 
-    local collectibleId = self:FindCollectible("companion", searchText)
+    local collectibleId = CogsAssistants:FindCollectible("companion", searchText)
     if not collectibleId then
         Chat(string.format("Could not find an unlocked companion matching '%s'.", searchText))
         return
     end
 
-    self.savedVariables.companionSlots[slotIndex] = collectibleId
+    CogsAssistants.savedVariables.companionSlots[slotIndex] = collectibleId
     Chat(string.format("Companion slot %d set to %s.", slotIndex, GetCollectibleNameSafe(collectibleId)))
 end
 
@@ -617,31 +649,31 @@ function CogsAssistants:ClassifyAssistant(typeKey, searchText)
         return
     end
 
-    local collectibleId = self:FindAssistant(searchText)
+    local collectibleId = CogsAssistants:FindAssistant(searchText)
     if not collectibleId then
         Chat(string.format("Could not find an unlocked assistant matching '%s'.", searchText))
         return
     end
 
-    self.savedVariables.assistantOverrides[collectibleId] = typeKey
-    self:RefreshCollectibles()
+    CogsAssistants.savedVariables.assistantOverrides[collectibleId] = typeKey
+    CogsAssistants:RefreshCollectibles()
     Chat(string.format("%s classified as %s.", GetCollectibleNameSafe(collectibleId), TYPE_LABELS[typeKey]:lower()))
 end
 
 function CogsAssistants:ClearAssistantClassification(searchText)
-    local collectibleId = self:FindAssistant(searchText)
+    local collectibleId = CogsAssistants:FindAssistant(searchText)
     if not collectibleId then
         Chat(string.format("Could not find an unlocked assistant matching '%s'.", searchText))
         return
     end
 
-    self.savedVariables.assistantOverrides[collectibleId] = nil
-    self:RefreshCollectibles()
+    CogsAssistants.savedVariables.assistantOverrides[collectibleId] = nil
+    CogsAssistants:RefreshCollectibles()
     Chat(string.format("%s classification cleared.", GetCollectibleNameSafe(collectibleId)))
 end
 
 function CogsAssistants:PrintList(typeKey)
-    self:RefreshCollectibles()
+    CogsAssistants:RefreshCollectibles()
 
     if typeKey and typeKey ~= "" then
         if not TYPE_LABELS[typeKey] then
@@ -649,28 +681,28 @@ function CogsAssistants:PrintList(typeKey)
             return
         end
         Chat(TYPE_LABELS[typeKey] .. ":")
-        for _, collectibleId in ipairs(self.collectibles[typeKey] or {}) do
+        for _, collectibleId in ipairs(CogsAssistants.collectibles[typeKey] or {}) do
             Chat(string.format("  %d - %s", collectibleId, GetCollectibleNameSafe(collectibleId)))
         end
         return
     end
 
     for _, orderedTypeKey in ipairs(TYPE_ORDER) do
-        local list = self.collectibles[orderedTypeKey] or {}
+        local list = CogsAssistants.collectibles[orderedTypeKey] or {}
         Chat(string.format("%s: %d found", TYPE_LABELS[orderedTypeKey], #list))
     end
 end
 
 function CogsAssistants:PrintStatus()
-    self:RefreshCollectibles()
-    Chat(string.format("Status (%s settings):", self.settingsScope == "character" and "character-specific" or "account-wide"))
+    CogsAssistants:RefreshCollectibles()
+    Chat(string.format("Status (%s settings):", CogsAssistants.settingsScope == "character" and "character-specific" or "account-wide"))
     for _, typeKey in ipairs(TYPE_ORDER) do
         local selection = GetSelection(typeKey)
         local value = "random"
         if selection.mode == STATIC_MODE and selection.collectibleId then
             value = GetCollectibleNameSafe(selection.collectibleId)
         end
-        Chat(string.format("  %s: %s (%d available)", TYPE_LABELS[typeKey], value, #(self.collectibles[typeKey] or {})))
+        Chat(string.format("  %s: %s (%d available)", TYPE_LABELS[typeKey], value, #(CogsAssistants.collectibles[typeKey] or {})))
     end
 end
 
@@ -690,28 +722,28 @@ end
 function CogsAssistants:SetSettingsScope(scope)
     scope = Normalize(scope)
     if scope == "account" or scope == "accountwide" or scope == "account-wide" then
-        self:SetUseCharacterSettings(false)
+        CogsAssistants:SetUseCharacterSettings(false)
     elseif scope == "character" or scope == "character-specific" or scope == "char" then
-        self:SetUseCharacterSettings(true)
+        CogsAssistants:SetUseCharacterSettings(true)
     else
         Chat("Scope must be account or character.")
     end
 end
 
 function CogsAssistants:RegisterSettingsPanel()
-    local LAM = LibAddonMenu2 or (LibStub and LibStub("LibAddonMenu-2.0", true))
-    if not LAM or self.settingsPanelRegistered then
+    local LAM = LibAddonMenu2
+    if not LAM or CogsAssistants.settingsPanelRegistered then
         return
     end
 
-    self.settingsPanelRegistered = true
-    self:RefreshCollectibles()
+    CogsAssistants.settingsPanelRegistered = true
+    CogsAssistants:RefreshCollectibles()
 
     local typeChoices = {}
     for _, typeKey in ipairs(TYPE_ORDER) do
-        typeChoices[typeKey] = self:GetCollectibleChoices(typeKey, false)
+        typeChoices[typeKey] = CogsAssistants:GetCollectibleChoices(typeKey, false)
     end
-    local companionSlotChoices = self:GetCollectibleChoices("companion", true)
+    local companionSlotChoices = CogsAssistants:GetCollectibleChoices("companion", true)
 
     LAM:RegisterAddonPanel("CogsAssistantsOptions", {
         type = "panel",
@@ -736,14 +768,14 @@ function CogsAssistants:RegisterSettingsPanel()
             type = "checkbox",
             name = "Use character-specific settings",
             tooltip = "Off by default. When first enabled on a character, the current account-wide settings are copied to that character.",
-            getFunc = function() return self:IsUsingCharacterSettings() end,
-            setFunc = function(value) self:SetUseCharacterSettings(value) end,
+            getFunc = function() return CogsAssistants:IsUsingCharacterSettings() end,
+            setFunc = function(value) CogsAssistants:SetUseCharacterSettings(value) end,
         },
         {
             type = "checkbox",
             name = "Debug unclassified assistants",
-            getFunc = function() return self.savedVariables.debug end,
-            setFunc = function(value) self.savedVariables.debug = value end,
+            getFunc = function() return CogsAssistants.savedVariables.debug end,
+            setFunc = function(value) CogsAssistants.savedVariables.debug = value end,
         },
         {
             type = "header",
@@ -756,8 +788,8 @@ function CogsAssistants:RegisterSettingsPanel()
             type = "dropdown",
             name = TYPE_LABELS[typeKey],
             choices = typeChoices[typeKey],
-            getFunc = function() return self:GetSelectionChoice(typeKey) end,
-            setFunc = function(choice) self:SetSelectionChoice(typeKey, choice) end,
+            getFunc = function() return CogsAssistants:GetSelectionChoice(typeKey) end,
+            setFunc = function(choice) CogsAssistants:SetSelectionChoice(typeKey, choice) end,
             width = "full",
         })
     end
@@ -772,8 +804,8 @@ function CogsAssistants:RegisterSettingsPanel()
             type = "dropdown",
             name = string.format("Companion Slot %d", slotIndex),
             choices = companionSlotChoices,
-            getFunc = function() return self:GetCompanionSlotChoice(slotIndex) end,
-            setFunc = function(choice) self:SetCompanionSlotChoice(slotIndex, choice) end,
+            getFunc = function() return CogsAssistants:GetCompanionSlotChoice(slotIndex) end,
+            setFunc = function(choice) CogsAssistants:SetCompanionSlotChoice(slotIndex, choice) end,
             width = "full",
         })
     end
@@ -811,30 +843,30 @@ function CogsAssistants:HandleSlashCommand(text)
     local command = Normalize(args[1])
 
     if command == "" or command == "help" then
-        self:PrintHelp()
+        CogsAssistants:PrintHelp()
     elseif command == "list" then
-        self:PrintList(Normalize(args[2]))
+        CogsAssistants:PrintList(Normalize(args[2]))
     elseif command == "status" then
-        self:PrintStatus()
+        CogsAssistants:PrintStatus()
     elseif command == "set" then
-        self:SetTypeSelection(Normalize(args[2]), Remainder(args, 3))
+        CogsAssistants:SetTypeSelection(Normalize(args[2]), Remainder(args, 3))
     elseif command == "mode" then
-        self:SetTypeMode(Normalize(args[2]), args[3])
+        CogsAssistants:SetTypeMode(Normalize(args[2]), args[3])
     elseif command == "slot" then
-        self:SetCompanionSlot(args[2], Remainder(args, 3))
+        CogsAssistants:SetCompanionSlot(args[2], Remainder(args, 3))
     elseif command == "classify" then
-        self:ClassifyAssistant(Normalize(args[2]), Remainder(args, 3))
+        CogsAssistants:ClassifyAssistant(Normalize(args[2]), Remainder(args, 3))
     elseif command == "unclassify" then
-        self:ClearAssistantClassification(Remainder(args, 2))
+        CogsAssistants:ClearAssistantClassification(Remainder(args, 2))
     elseif command == "scope" then
-        self:SetSettingsScope(args[2])
+        CogsAssistants:SetSettingsScope(args[2])
     elseif command == "summon" then
-        self:SummonType(Normalize(args[2]))
+        CogsAssistants:SummonType(Normalize(args[2]))
     elseif command == "debug" then
-        self.savedVariables.debug = not self.savedVariables.debug
-        Chat(string.format("Debug is now %s.", self.savedVariables.debug and "on" or "off"))
+        CogsAssistants.savedVariables.debug = not CogsAssistants.savedVariables.debug
+        Chat(string.format("Debug is now %s.", CogsAssistants.savedVariables.debug and "on" or "off"))
     else
-        self:PrintHelp()
+        CogsAssistants:PrintHelp()
     end
 end
 
@@ -866,16 +898,23 @@ local function OnAddOnLoaded(_, addonName)
     end
 
     EVENT_MANAGER:UnregisterForEvent(EVENT_NAMESPACE, EVENT_ADD_ON_LOADED)
-    CogsAssistants.preferences = ZO_SavedVars:NewAccountWide(SAVED_VARIABLES_NAME, SAVED_VARIABLES_VERSION, PREFERENCES_NAMESPACE, DEFAULT_PREFERENCES)
+    local legacyPreferences = GetLegacySavedVariables(PREFERENCES_NAMESPACE, false)
+    CogsAssistants.preferences = ZO_SavedVars:NewAccountWide(SAVED_VARIABLES_NAME, SAVED_VARIABLES_VERSION, PREFERENCES_NAMESPACE, DEFAULT_PREFERENCES, GetWorldName())
+    if legacyPreferences
+        and legacyPreferences.characterSettingsEnabled
+        and next(legacyPreferences.characterSettingsEnabled) ~= nil
+        and next(CogsAssistants.preferences.characterSettingsEnabled or {}) == nil then
+        CopySavedVariables(legacyPreferences, CogsAssistants.preferences)
+    end
     EnsurePreferenceShape()
     CogsAssistants:LoadSavedVariables(false)
     CogsAssistants:RefreshCollectibles()
     CogsAssistants:RegisterSettingsPanel()
+    EVENT_MANAGER:RegisterForEvent(EVENT_NAMESPACE, EVENT_COLLECTIBLE_UPDATED, function() CogsAssistants:RefreshCollectibles() end)
+    EVENT_MANAGER:RegisterForEvent(EVENT_NAMESPACE, EVENT_COLLECTION_UPDATED, function() CogsAssistants:RefreshCollectibles() end)
     SLASH_COMMANDS["/cogsassistants"] = function(text) CogsAssistants:HandleSlashCommand(text) end
     SLASH_COMMANDS["/ca"] = SLASH_COMMANDS["/cogsassistants"]
 end
 
 CreateBindingStrings()
 EVENT_MANAGER:RegisterForEvent(EVENT_NAMESPACE, EVENT_ADD_ON_LOADED, OnAddOnLoaded)
-EVENT_MANAGER:RegisterForEvent(EVENT_NAMESPACE, EVENT_COLLECTIBLE_UPDATED, function() CogsAssistants:RefreshCollectibles() end)
-EVENT_MANAGER:RegisterForEvent(EVENT_NAMESPACE, EVENT_COLLECTION_UPDATED, function() CogsAssistants:RefreshCollectibles() end)
