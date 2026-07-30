@@ -4,7 +4,7 @@ local CogsAssistants = CogsAssistants
 local ADDON_NAME = "CogsAssistants"
 local DEV_ADDON_NAME = "cogs-assistants"
 local EVENT_NAMESPACE = "CogsAssistants"
-local ADDON_VERSION = "0.1.2"
+local ADDON_VERSION = "0.1.3"
 local SAVED_VARIABLES_NAME = "CogsAssistantsSavedVariables"
 local SAVED_VARIABLES_VERSION = 1
 local PREFERENCES_NAMESPACE = "Preferences"
@@ -38,23 +38,23 @@ local ASSISTANT_KEYWORDS =
 {
     merchant =
     {
-        "merchant", "trader", "vendor", "shopkeeper", "commerce", "delegate", "peddler", "pedlar", "nuzhimeh", "fezez", "jangleplume",
+        "merchant", "trader", "vendor", "shopkeeper", "commerce", "delegate", "peddler", "pedlar", "nuzhimeh", "fezez", "factotum commerce delegate", "hoarfrost", "terilorne", "xyn",
     },
     banker =
     {
-        "banker", "bank", "tythis", "ezabi", "pyroclast", "factotum property steward",
+        "banker", "bank", "tythis", "ezabi", "pyroclast", "factotum property steward", "jangleplume", "celia", "eri",
     },
     deconstructor =
     {
-        "deconstruct", "deconstruction", "ragpicker", "giladil", "alezeld",
+        "deconstruct", "deconstruction", "ragpicker", "giladil", "alezeld", "aderene", "remus", "siluruz", "tzozabrar",
     },
     fence =
     {
-        "fence", "smuggler", "pirharri",
+        "fence", "smuggler", "pirharri", "cambio zammes",
     },
     armorer =
     {
-        "armorer", "armourer", "armory", "armoury", "ghrasharog",
+        "armorer", "armourer", "armory", "armoury", "ghrasharog", "drinweth", "voko", "zuqoth",
     },
 }
 
@@ -92,6 +92,7 @@ local DEFAULTS =
     companionSlots = {},
     assistantOverrides = {},
     debug = false,
+    dismissActiveOnReuse = true,
 }
 
 local DEFAULT_PREFERENCES =
@@ -162,7 +163,14 @@ local function SortByName(left, right)
 end
 
 local function CloneDefaults()
-    local clone = { selections = {}, companionSlots = {}, assistantOverrides = {}, debug = false }
+    local clone =
+    {
+        selections = {},
+        companionSlots = {},
+        assistantOverrides = {},
+        debug = DEFAULTS.debug,
+        dismissActiveOnReuse = DEFAULTS.dismissActiveOnReuse,
+    }
     for typeKey, setting in pairs(DEFAULTS.selections) do
         clone.selections[typeKey] = { mode = setting.mode, collectibleId = setting.collectibleId }
     end
@@ -222,6 +230,9 @@ local function EnsureSavedVariableShape()
     CogsAssistants.savedVariables.selections = CogsAssistants.savedVariables.selections or {}
     CogsAssistants.savedVariables.companionSlots = CogsAssistants.savedVariables.companionSlots or {}
     CogsAssistants.savedVariables.assistantOverrides = CogsAssistants.savedVariables.assistantOverrides or {}
+    if CogsAssistants.savedVariables.dismissActiveOnReuse == nil then
+        CogsAssistants.savedVariables.dismissActiveOnReuse = DEFAULTS.dismissActiveOnReuse
+    end
 
     for typeKey, setting in pairs(DEFAULTS.selections) do
         if not CogsAssistants.savedVariables.selections[typeKey] then
@@ -406,6 +417,14 @@ function CogsAssistants:GetRandomCollectible(typeKey)
     end
 
     local activeCollectibleId = GetActiveCollectibleByType(typeKey == "companion" and COLLECTIBLE_CATEGORY_TYPE_COMPANION or COLLECTIBLE_CATEGORY_TYPE_ASSISTANT, GAMEPLAY_ACTOR_CATEGORY_PLAYER)
+    if activeCollectibleId and activeCollectibleId ~= 0 and CogsAssistants.savedVariables.dismissActiveOnReuse then
+        for _, collectibleId in ipairs(list) do
+            if collectibleId == activeCollectibleId then
+                return activeCollectibleId
+            end
+        end
+    end
+
     local pick = list[zo_random(1, #list)]
     if activeCollectibleId and activeCollectibleId ~= 0 then
         for _ = 1, 5 do
@@ -704,6 +723,7 @@ function CogsAssistants:PrintStatus()
         end
         Chat(string.format("  %s: %s (%d available)", TYPE_LABELS[typeKey], value, #(CogsAssistants.collectibles[typeKey] or {})))
     end
+    Chat(string.format("  Dismiss active random assistant on reuse: %s", CogsAssistants.savedVariables.dismissActiveOnReuse and "on" or "off"))
 end
 
 function CogsAssistants:PrintHelp()
@@ -715,8 +735,28 @@ function CogsAssistants:PrintHelp()
     Chat("  /cogsassistants classify <type> <assistant name|id>")
     Chat("  /cogsassistants unclassify <assistant name|id>")
     Chat("  /cogsassistants scope <account|character>")
+    Chat("  /cogsassistants dismiss [on|off]")
     Chat("  /cogsassistants summon <type>")
     Chat("  /cogsassistants debug")
+end
+
+function CogsAssistants:SetDismissActiveOnReuse(value)
+    value = Normalize(value)
+    if value == "" then
+        Chat(string.format("Dismiss active random assistant on reuse is %s.", CogsAssistants.savedVariables.dismissActiveOnReuse and "on" or "off"))
+        return
+    end
+
+    if value == "on" or value == "true" or value == "1" then
+        CogsAssistants.savedVariables.dismissActiveOnReuse = true
+    elseif value == "off" or value == "false" or value == "0" then
+        CogsAssistants.savedVariables.dismissActiveOnReuse = false
+    else
+        Chat("Dismiss must be on or off.")
+        return
+    end
+
+    Chat(string.format("Dismiss active random assistant on reuse is now %s.", CogsAssistants.savedVariables.dismissActiveOnReuse and "on" or "off"))
 end
 
 function CogsAssistants:SetSettingsScope(scope)
@@ -776,6 +816,13 @@ function CogsAssistants:RegisterSettingsPanel()
             name = "Debug unclassified assistants",
             getFunc = function() return CogsAssistants.savedVariables.debug end,
             setFunc = function(value) CogsAssistants.savedVariables.debug = value end,
+        },
+        {
+            type = "checkbox",
+            name = "Dismiss active random assistant on reuse",
+            tooltip = "When enabled, using a random type binding while an assistant of that type is active dismisses it instead of selecting another. With only one assistant available, reusing it may dismiss it regardless of this setting.",
+            getFunc = function() return CogsAssistants.savedVariables.dismissActiveOnReuse end,
+            setFunc = function(value) CogsAssistants.savedVariables.dismissActiveOnReuse = value end,
         },
         {
             type = "header",
@@ -860,6 +907,8 @@ function CogsAssistants:HandleSlashCommand(text)
         CogsAssistants:ClearAssistantClassification(Remainder(args, 2))
     elseif command == "scope" then
         CogsAssistants:SetSettingsScope(args[2])
+    elseif command == "dismiss" then
+        CogsAssistants:SetDismissActiveOnReuse(args[2])
     elseif command == "summon" then
         CogsAssistants:SummonType(Normalize(args[2]))
     elseif command == "debug" then
